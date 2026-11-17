@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.22] - 2026-11-18
+
+### User-facing changes
+
+#### Changed
+
+- **LaunchBox:** The optional LaunchBox plugin and Windows contract harness target .NET 11. Use the .NET 10 build with LaunchBox installations that still run .NET 10.
+
 ## [0.14.21] - 2026-11-12
 
 ### User-facing changes
