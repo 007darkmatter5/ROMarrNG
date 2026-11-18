@@ -25,7 +25,7 @@ empty library.
   that cannot be tested: `Unbroken.LaunchBox.Plugins.dll` is not
   redistributable, so the compile is against a reconstruction of the eight
   API members the plugin touches, not the shipping assembly. The proof harness
-  and plugin now target `net10.0-windows` for LaunchBox 14 and newer.
+  and plugin target both `net11.0-windows` and `net10.0-windows`.
 
 The integration is still built on the exports first: a `gamelist.xml` has
 been read the same way for fifteen years, and no plugin API can break it.
@@ -67,9 +67,8 @@ Two ways in, and the second is the one to reach for first.
 **Import the XML.** Export `format=launchbox`, then in LaunchBox use
 **Tools → Import → LaunchBox XML**. Nothing to install and nothing to break.
 
-**Or build the plugin.** `launchbox/` is a .NET 10 class library against
-`Unbroken.LaunchBox.Plugins`. It adds a *ROMarr → Sync* menu item and targets
-LaunchBox 14 and newer, whose Windows host uses .NET 10. The normal XML import
+**Or build the plugin.** `launchbox/` is a Windows class library for .NET 11 and .NET 10 built against
+`Unbroken.LaunchBox.Plugins`. It adds a *ROMarr → Sync* menu item to LaunchBox. Select the build matching the .NET runtime used by your installed host. The normal XML import
 path remains available for older LaunchBox versions.
 
 ```
@@ -79,8 +78,9 @@ dotnet build -c Release -p:LaunchBoxApiAssembly="C:\path\to\Unbroken.LaunchBox.P
 
 Set `LaunchBoxApiAssembly` to the path of `Unbroken.LaunchBox.Plugins.dll` in
 your own LaunchBox installation; the API DLL is not redistributable. The build
-requires the .NET 10 SDK. Copy the resulting
-`bin\Release\net10.0-windows\ROMarr.LaunchBox.dll` into
+requires the .NET 11 SDK. Copy `ROMarr.LaunchBox.dll` from
+`bin\Release\net11.0-windows\` for a .NET 11 host or
+`bin\Release\net10.0-windows\` for a .NET 10 host into
 `LaunchBox\Plugins\ROMarr\`. This remains the less-supported path because it
 depends on LaunchBox's plugin API; importing the XML has no plugin or SDK
 dependency.
