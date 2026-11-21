@@ -7,8 +7,7 @@ validation; missing private capacity does not block compatible hosted execution.
 
 Keep untrusted pull-request code on disposable runners with no secrets and
 minimal read permissions. Preserve active builds and other agents' work. Do not
-restart brokers or widen trusted runner access. CodeQL remains disabled under
-the separate organization-wide owner directive.
+restart brokers or widen trusted runner access.
 
 ## Upstream source attribution
 
