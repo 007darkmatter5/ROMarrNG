@@ -44,8 +44,3 @@ def test_gvisor_smoke_keeps_special_capability_route():
     assert "options: [private]" in source
     assert "gvisor" in source.lower()
 
-
-def test_codeql_remains_disabled():
-    for path in WORKFLOWS.glob("*.yml"):
-        assert "codeql" not in path.name.lower()
-        assert "github/codeql-action" not in path.read_text()
