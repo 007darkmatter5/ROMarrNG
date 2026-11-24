@@ -223,8 +223,51 @@ def test_non_game_categories_are_rejected():
 def test_title_must_actually_match_the_request():
     assert title_matches("Super Mario World (USA)", "super mario world")
     assert not title_matches("Sonic the Hedgehog (USA)", "super mario world")
-    # Short words are ignored, so this still matches.
+    # Articles are ignored, so this still matches.
     assert title_matches("The Legend of Zelda (USA)", "legend of zelda")
+
+
+def test_a_sequel_does_not_outrank_the_requested_game():
+    """Reported live from a GameCube search for Metroid Prime.
+
+    Prowlarr returned the first game and Prime 2. Title matching only required
+    the requested words to occur somewhere, so `Metroid.Prime.2.Echoes` passed,
+    and its `.iso` earned the ROM-extension bonus that put the sequel first.
+    """
+    ngc = by_slug("ngc")
+    sequel = rel("Metroid.Prime.2.Echoes.PAL.NGC.iso",
+                 size=1_450_000_000, seeders=40)
+    bre = rel("Metroid Prime.PAL.NGC-BRE", size=1_400_000_000, seeders=4)
+    idnahx = rel("[NGC] Metroid Prime[idnahx]", size=1_400_000_000, seeders=4)
+    for extra in (
+            "Metroid.Prime.3.Corruption.PAL.NGC.iso",
+            "Metroid Prime Trilogy.PAL.Wii.iso",
+            "Metroid Prime II Echoes (Europe).iso",
+    ):
+        assert score(rel(extra, size=1_450_000_000, seeders=40),
+                     "Metroid Prime", ngc) < 0, extra
+    assert score(sequel, "Metroid Prime", ngc) < 0
+    assert score(bre, "Metroid Prime", ngc) > 0
+    assert score(idnahx, "Metroid Prime", ngc) > 0
+    assert best_release([sequel, bre, idnahx], "Metroid Prime", ngc) in (bre, idnahx)
+
+
+def test_a_requested_sequel_still_matches_its_own_releases():
+    """The same Prime 2 release is the right grab when Prime 2 was requested."""
+    ngc = by_slug("ngc")
+    echoes = rel("Metroid.Prime.2.Echoes.PAL.NGC.iso",
+                 size=1_450_000_000, seeders=8)
+    prime = rel("Metroid Prime.PAL.NGC-BRE", size=1_400_000_000, seeders=30)
+    assert title_matches(echoes.title, "Metroid Prime 2: Echoes", ngc)
+    assert not title_matches(prime.title, "Metroid Prime 2: Echoes", ngc)
+    assert score(echoes, "Metroid Prime 2: Echoes", ngc) > 0
+    assert best_release([prime, echoes], "Metroid Prime 2: Echoes", ngc) is echoes
+
+
+def test_a_roman_numeral_sequel_is_not_the_unnumbered_game():
+    snes = by_slug("snes")
+    assert score(rel("Final Fantasy II (USA)"), "final fantasy", snes) < 0
+    assert score(rel("Final Fantasy II (USA)"), "final fantasy ii", snes) > 0
 
 
 def test_dead_torrent_is_never_chosen():

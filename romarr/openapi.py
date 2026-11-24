@@ -100,8 +100,10 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/integration/catalog/dat/games/{catalogKey}": ("GET", "Read one DAT title by its stable opaque catalog key."),
     "/api/v1/integration/library/lookup": ("POST", "Bounded title and platform "
                                              "lookup against the cached ROM library. "
+                                             "Matches stored metadata titles, IGDB ids, "
+                                             "and common ROM filename forms. "
                                              "Returns readiness, partial-cache state, "
-                                             "and exact matches without file paths."),
+                                             "and matches without file paths."),
     "/api/v1/integration/requests": ("POST", "Create an idempotent SeerrNG "
                                             "ROM request or accept a generic "
                                             "external-platform request."),
