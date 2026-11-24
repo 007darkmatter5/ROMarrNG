@@ -520,10 +520,13 @@ def igdb_catalog_search(cfg: dict, query: str, limit: int, offset: int,
         start = int(datetime.datetime(release_year, 1, 1, tzinfo=datetime.timezone.utc).timestamp())
         end = int(datetime.datetime(release_year + 1, 1, 1, tzinfo=datetime.timezone.utc).timestamp()) - 1
         where.extend((f"first_release_date >= {start}", f"first_release_date <= {end}"))
+    # IGDB rejects a query that combines `search` with `sort` (HTTP 406).
+    # Search results are already ordered by relevance. Shelves that do not
+    # search, such as popular and genre lists, can still sort.
     rows = igdb_query(
         cfg, "games",
         f'search "{escaped}"; {IGDB_CATALOG_FIELDS} where '
-        f'{" & ".join(where)}; sort name asc; limit 500; '
+        f'{" & ".join(where)}; limit 500; '
         f'offset {max(0, min(int(offset), 10000))};',
         strict=True,
     )

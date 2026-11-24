@@ -973,7 +973,8 @@ class Store:
                                   "metadata_source", "matched_by",
                                   "metadata_status", "metadata_attempted_at",
                                   "platform_slug", "platform_manual", "notes",
-                                  "frontend_source_fields", "updated_at"}}
+                                  "provider_id", "frontend_source_fields",
+                                  "updated_at"}}
             payloads.append((key, json.dumps(clean, ensure_ascii=False)))
         if payloads:
             with self._lock:
@@ -996,7 +997,7 @@ class Store:
                    "rating", "genres", "metadata_source", "matched_by",
                    "metadata_status", "metadata_attempted_at",
                    "platform_slug", "platform_manual", "notes",
-                   "frontend_source_fields"}
+                   "provider_id", "frontend_source_fields"}
         clean = {key: value for key, value in patch.items() if key in allowed}
         key = self._library_metadata_key(library_id, item_id)
         with self._lock:
@@ -1025,7 +1026,7 @@ class Store:
                    "rating", "genres", "metadata_source", "matched_by",
                    "metadata_status", "metadata_attempted_at",
                    "platform_slug", "platform_manual", "notes",
-                   "frontend_source_fields"}
+                   "provider_id", "frontend_source_fields"}
         normalized = []
         for library_id, item_id, patch in updates:
             if not isinstance(patch, dict):

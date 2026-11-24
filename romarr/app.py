@@ -304,6 +304,164 @@ def _seerr_title_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", without_marks)
 
 
+# Parenthetical and bracket groups that are region, language, revision, or
+# dump flags rather than part of the title. "The Minish Cap" stays; "(USA)"
+# and "[!]" do not.
+_SEERR_DUMP_TAG = re.compile(
+    r"^(?:usa|us|u|europe|eu|eur|e|japan|jp|jpn|j|world|w|asia|korea|"
+    r"australia|france|germany|spain|italy|brazil|china|canada|"
+    r"netherlands|sweden|norway|denmark|finland|uk|united states|"
+    r"north america|ntsc|pal|ntsc u|ntsc j|ntsc us|"
+    r"en|eng|fr|de|es|it|ja|nl|pt|sv|no|da|fi|zh|"
+    r"proto|beta|demo|sample|unl|pirate|promo|alt|fixed|good|bad|"
+    r"dump|nkit|b|h|o|t|a|p)$"
+)
+_SEERR_REVISION_TAG = re.compile(
+    r"^(?:disc|disk|rev|revision|v)\s*[a-z0-9]+$"
+)
+_SEERR_BRACKET_GROUP = re.compile(r"[\(\[]([^\)\]]*)[\)\]]")
+_SEERR_LEADING_ARTICLE = re.compile(r"^(the|a|an)\s+", re.I)
+_SEERR_COMMA_ARTICLE = re.compile(
+    r"^(?P<main>.+?),\s*(?P<article>the|a|an)"
+    r"(?P<rest>\s*(?:[:\-].*)?)$",
+    re.I,
+)
+
+
+def _seerr_dump_tag(body: str) -> bool:
+    parts = [re.sub(r"[^a-z0-9]+", " ", part.casefold()).strip()
+             for part in str(body or "").split(",")]
+    parts = [part for part in parts if part]
+    if not parts:
+        return True
+    return all(_SEERR_DUMP_TAG.fullmatch(part) or _SEERR_REVISION_TAG.fullmatch(part)
+               for part in parts)
+
+
+def _seerr_strip_dump_tags(value: str) -> str:
+    text = str(value or "")
+    for _ in range(8):
+        updated = _SEERR_BRACKET_GROUP.sub(
+            lambda match: " " if _seerr_dump_tag(match.group(1)) else match.group(0),
+            text,
+        )
+        if updated == text:
+            break
+        text = updated
+    return text
+
+
+def _seerr_strip_dump_suffix(value: str) -> str:
+    """Drop .nkit and a trailing container or ROM extension."""
+    text = str(value or "").strip()
+    for _ in range(3):
+        updated = re.sub(r"\.nkit$", "", text, flags=re.I)
+        updated = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", updated)
+        if updated == text:
+            break
+        text = updated
+    return text
+
+
+def _seerr_article_forms(value: str) -> list[str]:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return []
+    forms = []
+    match = _SEERR_COMMA_ARTICLE.match(text)
+    if match:
+        forms.append(
+            f"{match.group('article')} {match.group('main')}"
+            f"{match.group('rest') or ''}".strip()
+        )
+    leading = _SEERR_LEADING_ARTICLE.match(text)
+    if leading:
+        rest = text[leading.end():].strip()
+        if rest:
+            forms.append(rest)
+    return forms
+
+
+def _seerr_title_variants(value: str) -> list[str]:
+    """Catalog titles and ROM filenames for the same game.
+
+    No-Intro dumps write ``Legend of Zelda, The (USA) [!].nes`` where IGDB
+    says ``The Legend of Zelda``. Underscores stand in for spaces or colons.
+    Each form is keyed so either side of a library lookup can find the other.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    spaced = re.sub(r"\s+", " ", raw.replace("_", " ")).strip()
+    cleaned = _seerr_strip_dump_suffix(_seerr_strip_dump_tags(spaced))
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -_.:")
+    pending = [raw, spaced, cleaned]
+    unique = []
+    seen = set()
+    while pending:
+        variant = re.sub(r"\s+", " ", pending.pop()).strip(" -_.:")
+        if not variant or variant.casefold() in seen:
+            continue
+        seen.add(variant.casefold())
+        unique.append(variant)
+        pending.extend(_seerr_article_forms(variant))
+    return unique
+
+
+def _seerr_text_keys(value: str) -> set[str]:
+    return {key for variant in _seerr_title_variants(value)
+            if (key := _seerr_title_key(variant))}
+
+
+def _seerr_igdb_id(value) -> str:
+    if isinstance(value, bool) or value is None:
+        return ""
+    if isinstance(value, int):
+        return str(value) if value > 0 else ""
+    text = str(value).strip()
+    if not text.isdigit():
+        return ""
+    number = int(text)
+    if not 1 <= number <= 9_999_999_999:
+        return ""
+    return str(number)
+
+
+def _seerr_platform_slug(platform: str, platform_slug: str = "") -> str | None:
+    chosen = resolve(platform_slug) if platform_slug else None
+    if chosen is None and platform:
+        chosen = resolve(platform)
+    return chosen.slug if chosen else None
+
+
+def _seerr_row_text(row, key: str) -> str:
+    if isinstance(row, dict):
+        return str(row.get(key) or "")
+    return str(getattr(row, key, "") or "")
+
+
+def _seerr_row_labels(row) -> tuple[str, ...]:
+    return tuple(_seerr_row_text(row, key)
+                 for key in ("name", "metadata_title", "title"))
+
+
+def _seerr_row_igdb_id(row) -> str:
+    source = _seerr_row_text(row, "metadata_source")
+    if source.casefold() != "igdb":
+        return ""
+    raw = (_seerr_row_text(row, "metadata_provider_id")
+           or _seerr_row_text(row, "provider_id")
+           or _seerr_row_text(row, "igdb_id"))
+    return _seerr_igdb_id(raw)
+
+
+def _seerr_row_platform(row) -> str | None:
+    return _seerr_platform_slug(
+        _seerr_row_text(row, "platform"),
+        _seerr_row_text(row, "platform_slug"),
+    )
+
+
 _DAT_REGION_ALIASES = {
     "u": "usa", "us": "usa", "usa": "usa", "north america": "usa",
     "ntsc": "usa", "ntsc u": "usa", "ntsc us": "usa",
@@ -341,65 +499,160 @@ def _seerr_dat_variant_matches(dat_entry: str, release_title: str) -> bool:
     return not requested or not actual or bool(requested & actual)
 
 
+def _seerr_lookup_indexes(titles: list[dict]) -> tuple[list[dict], dict, dict]:
+    """Request order, plus title-key and IGDB-id indexes.
+
+    The returned payload is only the title and platform SeerrNG sent. An
+    optional igdbId is an extra way to hit that same payload.
+    """
+    ordered = []
+    seen = set()
+    by_title = {}
+    by_igdb = {}
+    for item in titles:
+        title = str(item.get("title") or "")
+        platform = str(item.get("platform") or "")
+        payload = {"title": title, "platform": platform}
+        ident = (platform, title)
+        if ident not in seen:
+            seen.add(ident)
+            ordered.append(payload)
+        for key in _seerr_text_keys(title):
+            by_title.setdefault((platform, key), payload)
+        igdb_id = _seerr_igdb_id(item.get("igdbId", item.get("igdb_id")))
+        if igdb_id:
+            by_igdb.setdefault((platform, igdb_id), payload)
+    return ordered, by_title, by_igdb
+
+
+def _seerr_queue_states(service) -> dict[tuple[str, str], str]:
+    """Latest queue state for every title form of each queued game."""
+    latest = {}
+    for item in service.queue:
+        platform = _seerr_platform_slug(item.platform) or str(item.platform or "")
+        for key in _seerr_text_keys(item.game):
+            latest[(platform, key)] = item.state
+    return latest
+
+
+def _seerr_owned_payloads(labels, platform: str, igdb_id: str,
+                          by_title: dict, by_igdb: dict,
+                          incomplete: set) -> list[dict]:
+    hits = []
+    blocked = set()
+    seen = set()
+    for key in set().union(*(_seerr_text_keys(label) for label in labels)):
+        payload = by_title.get((platform, key))
+        if payload is None:
+            continue
+        ident = (payload["platform"], payload["title"])
+        if (platform, key) in incomplete:
+            blocked.add(ident)
+            continue
+        if ident not in seen:
+            seen.add(ident)
+            hits.append(payload)
+    if igdb_id:
+        payload = by_igdb.get((platform, igdb_id))
+        if payload is not None:
+            ident = (payload["platform"], payload["title"])
+            # A failed import of this request still wins, even when the file
+            # name does not share a title form with the catalog title.
+            title_blocked = any(
+                (platform, key) in incomplete
+                for key in _seerr_text_keys(payload["title"]))
+            if ident not in blocked and ident not in seen and not title_blocked:
+                hits.append(payload)
+    return [payload for payload in hits
+            if (payload["platform"], payload["title"]) not in blocked]
+
+
 def _seerr_library_lookup(service, titles: list[dict]) -> dict:
     games, _, _ = service._library_cache
-    requested = {
-        (item["platform"], _seerr_title_key(item["title"])):
-        {"title": item["title"], "platform": item["platform"]}
-        for item in titles
-    }
-    matches = {}
-    latest = {(item.platform, _seerr_title_key(item.game)): item
-              for item in service.queue}
-    incomplete = {key for key, item in latest.items()
-                  if item.state == "import-failed"}
+    ordered, by_title, by_igdb = _seerr_lookup_indexes(titles)
+    latest = _seerr_queue_states(service)
+    incomplete = {key for key, state in latest.items() if state == "import-failed"}
+    found = {}
+
+    def consider(platform: str, labels, igdb_id: str = "") -> None:
+        for payload in _seerr_owned_payloads(
+                labels, platform, igdb_id, by_title, by_igdb, incomplete):
+            found[(payload["platform"], payload["title"])] = payload
+
     # Preserve catalog identity even when an imported package/folder is named
     # by a console title ID rather than the title the user requested.
     for item in service.queue:
-        key = (item.platform, _seerr_title_key(item.game))
-        if (item.state != "imported" or not item.imported_paths
-                or key not in requested or key in incomplete):
+        if item.state != "imported" or not item.imported_paths:
+            continue
+        platform = _seerr_platform_slug(item.platform) or str(item.platform or "")
+        if not any((platform, key) in by_title for key in _seerr_text_keys(item.game)):
             continue
         target = service.library_for(item.platform) or service.default_library()
         if target is None:
             continue
         try:
             root = service.library_root(target[0]).resolve(strict=True)
-            if all(Path(path).resolve(strict=True).is_relative_to(root)
-                   for path in item.imported_paths):
-                matches[key] = requested[key]
+            if not all(Path(path).resolve(strict=True).is_relative_to(root)
+                       for path in item.imported_paths):
+                continue
         except (OSError, ValueError):
             continue
+        consider(platform, (item.game,))
     if games is None:
+        matches = [payload for payload in ordered
+                   if (payload["platform"], payload["title"]) in found]
         return {"ready": bool(matches), "partial": bool(matches),
-                "matches": list(matches.values())}
+                "matches": matches}
     for game in games:
-        platform = resolve(game.platform)
+        platform = _seerr_row_platform(game)
         if platform is None:
             continue
-        key = (platform.slug, _seerr_title_key(game.name))
-        if key in requested and key not in incomplete:
-            matches[key] = requested[key]
-            if len(matches) == len(requested):
-                break
+        consider(platform, _seerr_row_labels(game), _seerr_row_igdb_id(game))
+        if len(found) == len(ordered):
+            break
     return {"ready": True,
             "partial": bool(service._library_partial),
-            "matches": list(matches.values())}
+            "matches": [payload for payload in ordered
+                        if (payload["platform"], payload["title"]) in found]}
 
 
 def _seerr_library_matches(service, request: SeerrRequest) -> list[dict]:
-    try:
-        rows = service.library_view(q=request.game, limit=500).get("items", [])
-    except Exception:
-        return []
-    wanted_title = _seerr_title_key(request.game)
+    wanted = _seerr_text_keys(request.game)
+    wanted_id = ""
+    if str(getattr(request, "catalog_provider", "") or "").casefold() == "igdb":
+        wanted_id = _seerr_igdb_id(getattr(request, "catalog_id", 0))
+    games, _, _ = service._library_cache
+    if games is None:
+        try:
+            rows = service.library_view(q=request.game, limit=500).get("items", [])
+        except Exception:
+            return []
+    else:
+        rows = games
     matches = []
     for row in rows:
-        if _seerr_title_key(row.get("name", "")) != wanted_title:
+        have = set()
+        for label in _seerr_row_labels(row):
+            have |= _seerr_text_keys(label)
+        igdb_id = _seerr_row_igdb_id(row)
+        if not (have & wanted) and not (wanted_id and igdb_id == wanted_id):
             continue
-        platform = resolve(row.get("platform", ""))
-        if platform and platform.slug == request.platform:
+        platform = _seerr_row_platform(row)
+        if platform != request.platform:
+            continue
+        if isinstance(row, dict):
             matches.append(row)
+        else:
+            matches.append({
+                "id": getattr(row, "id", ""),
+                "name": getattr(row, "name", ""),
+                "platform": getattr(row, "platform", ""),
+                "platform_slug": getattr(row, "platform_slug", ""),
+                "metadata_title": getattr(row, "metadata_title", ""),
+                "metadata_source": getattr(row, "metadata_source", ""),
+                "metadata_provider_id": getattr(row, "metadata_provider_id", ""),
+                "path": getattr(row, "path", ""),
+            })
     return matches
 
 
@@ -4114,6 +4367,7 @@ class ROMarr:
             "genres": list(info.genres),
             "metadata_source": info.source,
             "matched_by": info.matched_by,
+            "provider_id": str(info.provider_id or "")[:64],
             "metadata_status": "identified",
             "metadata_attempted_at": attempted_at,
         })
@@ -4766,6 +5020,7 @@ class ROMarr:
                 metadata_source=str(saved.get("metadata_source") or ""),
                 matched_by=str(saved.get("matched_by") or ""),
                 metadata_status=str(saved.get("metadata_status") or ""),
+                metadata_provider_id=str(saved.get("provider_id") or ""),
                 genres=game.genres or tuple(saved.get("genres") or ()),
                 rating=game.rating or float(saved.get("rating") or 0.0),
                 released=game.released or str(saved.get("released") or ""),
@@ -8077,7 +8332,14 @@ def make_handler(service: ROMarr):
                     if (not isinstance(title, str) or not title.strip()
                             or len(title) > 500 or resolved is None):
                         return self._json(400, {"error": "invalid title or platform"})
-                    parsed.append({"title": title.strip(), "platform": resolved.slug})
+                    entry = {"title": title.strip(), "platform": resolved.slug}
+                    raw_igdb = item.get("igdbId", item.get("igdb_id", None))
+                    if raw_igdb not in (None, "", 0, "0"):
+                        igdb_id = _seerr_igdb_id(raw_igdb)
+                        if not igdb_id:
+                            return self._json(400, {"error": "invalid IGDB id"})
+                        entry["igdbId"] = int(igdb_id)
+                    parsed.append(entry)
                 return self._json(200, _seerr_library_lookup(service, parsed))
 
             if route.path == "/api/v1/integration/requests":
@@ -8178,7 +8440,11 @@ def make_handler(service: ROMarr):
                         # A patch request is never satisfied by the base game.
                         status="available" if not selection and _seerr_library_matches(
                             service,
-                            SeerrRequest(external_id, game, platform.slug),
+                            SeerrRequest(
+                                external_id, game, platform.slug,
+                                catalog_provider=catalog_provider,
+                                catalog_id=catalog_id or 0,
+                            ),
                         ) else "searching",
                     )
                     reserved = row.status != "available"

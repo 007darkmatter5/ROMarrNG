@@ -52,7 +52,13 @@ Platform rows also include optional IGDB `generation` and `logoUrl` metadata.
 
 `POST /api/v1/integration/library/lookup` accepts between 1 and 100
 `{ "title": "...", "platform": "..." }` entries and returns whether those
-games already exist in the configured library.
+games already exist in the configured library. A row matches when the
+catalog title and the stored filename or metadata title are the same game
+after ROM naming differences are folded out: a trailing comma article
+(`Legend of Zelda, The`), underscores in place of spaces or colons, and
+region or dump tags such as `(USA)`, `[!]`, and `.nkit`. An optional numeric
+`igdbId` also matches a row whose saved metadata source is IGDB and whose
+saved provider id is that game.
 
 ## Game catalog
 

@@ -146,6 +146,9 @@ class Game:
     media_status: str = ""
     media_missing: tuple[str, ...] = ()
     scan_generation: str = ""
+    # Provider id saved with metadata_title. Ownership checks treat it as an
+    # IGDB id only when metadata_source is IGDB.
+    metadata_provider_id: str = ""
 
 
 # Budget for the background shelf fetch. Nothing waits on it, so it is

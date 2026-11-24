@@ -123,6 +123,52 @@ def test_the_result_records_how_it_was_matched(monkeypatch):
     assert metadata.identify(filename="Contra (USA).nes").matched_by == "filename"
 
 
+def test_catalog_search_does_not_combine_search_with_sort(monkeypatch):
+    """IGDB answers HTTP 406 when a search query also sorts."""
+    bodies = []
+
+    def query(cfg, endpoint, body, *, strict=False):
+        bodies.append((endpoint, body))
+        return [{"id": 1022, "name": "The Legend of Zelda",
+                 "genres": [{"name": "Adventure"}]}]
+
+    import romarr.metadata as module
+    monkeypatch.setattr(module, "igdb_query", query)
+
+    rows, _next = module.igdb_catalog_search(
+        {"client_id": "id", "token": "secret"}, 'Zelda "Link"', 5, 0,
+        genre="Adventure")
+
+    assert rows[0]["igdbId"] == 1022
+    endpoint, body = bodies[0]
+    assert endpoint == "games"
+    assert 'search "Zelda \\"Link\\""' in body
+    assert "sort " not in body.casefold()
+    assert "limit 500;" in body
+
+
+def test_catalog_popular_query_can_still_sort(monkeypatch):
+    bodies = []
+
+    def query(cfg, endpoint, body, *, strict=False):
+        bodies.append((endpoint, body))
+        if endpoint == "popularity_primitives":
+            return [{"game_id": 7, "value": 10}]
+        return [{"id": 7, "name": "Portal 2"}]
+
+    import romarr.metadata as module
+    monkeypatch.setattr(module, "igdb_query", query)
+
+    rows, _next = module.igdb_catalog_popular_page(
+        {"client_id": "id", "token": "secret"}, 0)
+
+    assert rows[0]["title"] == "Portal 2"
+    popular = next(body for endpoint, body in bodies
+                   if endpoint == "popularity_primitives")
+    assert "search " not in popular
+    assert "sort value desc" in popular
+
+
 def test_catalog_game_uses_the_exact_platform_release_date(monkeypatch):
     calls = []
 
