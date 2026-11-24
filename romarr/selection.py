@@ -13,7 +13,7 @@ import logging
 import re
 from dataclasses import dataclass
 
-from .platforms import DISC, Platform
+from .platforms import DISC, PLATFORMS, Platform, all_extensions
 
 log = logging.getLogger(__name__)
 
@@ -252,18 +252,256 @@ def _normalise(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
 
-def title_matches(release_title: str, wanted: str) -> bool:
+# Sequel numbers written as roman numerals. "i" and "v" are included because
+# Final Fantasy uses them as the whole title token; they are matched as whole
+# tokens, so the "v" inside "final" does not count.
+_ROMAN = frozenset({
+    "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
+    "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx",
+})
+
+# A following number or numeral belongs to the tag, not to the game:
+# "(Disc 1)", "(Rev 2)", "v1.1".
+_INDEX_WORDS = frozenset({
+    "disc", "disk", "rev", "revision", "version", "vol", "volume", "cd",
+})
+
+_ARTICLES = frozenset({"a", "an", "and", "of", "the"})
+
+
+def _token_words(values) -> set[str]:
+    words = set()
+    for value in values:
+        words.update(_normalise(str(value)).split())
+    # "update v" and "xbox series x" must not turn the roman numerals V and X
+    # into disposable tags. Those tokens are the sequel, when they stand alone.
+    return {token for token in words if token not in _ROMAN}
+
+
+def _tag_words() -> set[str]:
+    """Region, language, dump, and edition words that are not a game's name."""
+    return (
+        _token_words(marker for markers, _score in _REGION_SCORE for marker in markers)
+        | set(_REGION_CODES)
+        | _token_words(_NON_ENGLISH_MARKERS)
+        | _token_words(_JUNK_MARKERS)
+        | _token_words(_JUNK_MARKERS_DIGITAL)
+        | _token_words(COMPILATION_MARKERS)
+        | _token_words(PC_RELEASE_MARKERS)
+        | set(_TRUSTED_REPACKERS)
+        | _token_words(
+            project for projects in _DUMP_PROJECT_FOR_MEDIUM.values()
+            for project in projects)
+        | _ARTICLES
+        | _INDEX_WORDS
+        | {
+            "asia", "australia", "bad", "brazil", "canada", "china", "demo",
+            "denmark", "dump", "eng", "english", "finland", "france", "germany",
+            "good", "hack", "italy", "japan", "japanese", "korea", "nkit",
+            "netherlands", "norway", "ntsc", "pal", "proto", "sample", "spain",
+            "sweden", "translated", "retranslated", "retranslation", "translation",
+            "uk", "unl", "usa", "world",
+        }
+    )
+
+
+_TAG_WORDS = _tag_words()
+_EXTENSION_TOKENS = {ext.lstrip(".") for ext in all_extensions()} | {"7z", "nkit", "rar", "zip"}
+
+
+def _is_roman(token: str) -> bool:
+    return token.lower() in _ROMAN
+
+
+def _is_year(token: str) -> bool:
+    return bool(re.fullmatch(r"(?:19|20)\d\d", token))
+
+
+def _platform_phrases(platform: Platform | None) -> list[str]:
+    phrases = [marker for marker in FOREIGN_PLATFORM_MARKERS]
+    for entry in PLATFORMS:
+        phrases.extend((entry.slug, entry.name, *entry.aliases, *entry.native_markers))
+    if platform is not None:
+        phrases.extend((
+            platform.slug, platform.name, *platform.aliases, *platform.native_markers,
+        ))
+    # Scene abbreviations that are not always written as the platform's name.
+    phrases.extend(("gcn", "ngc", "smd"))
+    return phrases
+
+
+def _strip_scene_group(title: str) -> str:
+    """Drop a trailing scene group (`-BRE`) without eating a subtitle.
+
+    `NGC-BRE` credits the group. `-Echoes` and `-II` are part of the name.
+    """
+    match = re.search(r"-([A-Za-z][A-Za-z0-9]{1,11})$", title.strip())
+    if match is None:
+        return title
+    group = match.group(1)
+    if _is_roman(group) or group.isdigit():
+        return title
+    if group.isupper() or group.islower() or any(char.isdigit() for char in group):
+        return title[:match.start()]
+    return title
+
+
+def _strip_title_decoration(title: str) -> str:
+    """Remove extensions, scene groups, and bracketed region or dump tags."""
+    text = title.strip()
+    changed = True
+    while changed:
+        changed = False
+        extension = re.search(r"\.([A-Za-z0-9]{1,5})$", text)
+        if extension and extension.group(1).lower() in _EXTENSION_TOKENS:
+            text = text[:extension.start()]
+            changed = True
+            continue
+        stripped = _strip_scene_group(text)
+        if stripped != text:
+            text = stripped
+            changed = True
+
+    def replace_bracket(match: re.Match) -> str:
+        body = match.group(1)
+        opener = match.group(0)[:1]
+        if _bracket_is_noise(body) or (
+                opener == "[" and _square_group_tag(body)):
+            return " tag "
+        return f" {body} "
+
+    return re.sub(r"[\(\[]([^\)\]]*)[\)\]]", replace_bracket, text)
+
+
+def _bracket_is_noise(body: str) -> bool:
+    raw = str(body or "").strip()
+    if not raw or set(raw) <= set("!+-"):
+        return True
+    if re.fullmatch(r"t[-+][a-z0-9].*", raw, re.I):
+        return True
+    tokens = _normalise(raw).split()
+    if not tokens or tokens[0] == "by":
+        return True
+    expect_index = False
+    for token in tokens:
+        if _is_year(token) or token in _TAG_WORDS or token in _EXTENSION_TOKENS:
+            expect_index = token in _INDEX_WORDS
+            continue
+        if re.fullmatch(r"v\d+", token):
+            expect_index = True
+            continue
+        if expect_index and (token.isdigit() or _is_roman(token) or len(token) == 1):
+            expect_index = False
+            continue
+        return False
+    return True
+
+
+def _square_group_tag(body: str) -> bool:
+    """`[idnahx]` and `[jRPG]` name a group or a flag, not a subtitle."""
+    tokens = _normalise(body).split()
+    return len(tokens) == 1 and not tokens[0].isdigit() and not _is_roman(tokens[0])
+
+
+def _platform_tokens() -> set[str]:
+    tokens = {"gcn", "ngc", "smd"}
+    for phrase in _platform_phrases(None):
+        parts = _normalise(phrase).split()
+        if len(parts) == 1 and parts[0] not in _ROMAN:
+            tokens.add(parts[0])
+    return tokens
+
+
+_PLATFORM_TOKENS = _platform_tokens()
+
+
+def _is_boundary_token(token: str) -> bool:
+    """A region, platform, or dump tag. Words after the first one are not the name."""
+    return (
+        token in _TAG_WORDS
+        or token in _EXTENSION_TOKENS
+        or token in _PLATFORM_TOKENS
+        or token == "tag"
+        or _is_year(token)
+        or bool(re.fullmatch(r"v\d+", token))
+        or bool(re.fullmatch(r"(?:disc|rev)\d+", token))
+    )
+
+
+def _ordered_title_tokens(title: str, platform: Platform | None) -> list[str]:
+    text = _strip_title_decoration(title)
+    flat = f" {_normalise(text)} "
+    phrases = {
+        _normalise(item) for item in _platform_phrases(platform) if " " in _normalise(item)
+    }
+    for phrase in sorted(phrases, key=len, reverse=True):
+        flat = flat.replace(f" {phrase} ", " tag ")
+    return flat.split()
+
+
+def _requested_identity(wanted: str) -> set[str]:
+    return {
+        token for token in _normalise(wanted).split()
+        if token.isdigit() or token in _ROMAN or len(token) > 2
+    }
+
+
+def _unrequested_title_tokens(release_title: str, wanted: str,
+                              platform: Platform | None = None) -> list[str]:
+    """Sequel numbers, roman numerals, and subtitle words the request lacks.
+
+    `Metroid Prime` is contained in `Metroid Prime 2 Echoes`, but `2` and
+    `Echoes` sit in the name, before the region and platform tags. A scene
+    group or a word after those tags (`GOLDDISC`, `verified`) is not another
+    game. A number or numeral still counts wherever it appears.
+    """
+    requested = _requested_identity(wanted)
+    extras = []
+    seen_name = False
+    in_name = True
+    expect_index = False
+    for token in _ordered_title_tokens(release_title, platform):
+        if expect_index and token.isdigit():
+            continue
+        expect_index = False
+        if _is_boundary_token(token):
+            # A platform tag before the name, such as "[NGC]", does not end it.
+            if seen_name:
+                in_name = False
+            expect_index = token in _INDEX_WORDS or bool(re.fullmatch(r"v\d+", token))
+            continue
+        seen_name = True
+        if token in requested or token in _ARTICLES:
+            continue
+        if token.isdigit() or token in _ROMAN:
+            extras.append(token)
+            continue
+        if in_name and len(token) > 2:
+            extras.append(token)
+    return extras
+
+
+def title_matches(release_title: str, wanted: str,
+                  platform: Platform | None = None) -> bool:
     """Whether a release plausibly IS the requested game.
 
-    Every significant word of the request must appear. Short words are ignored
-    because "of", "the" and roman numerals produce false negatives more often
-    than they prevent false positives.
+    Every significant word of the request must appear. Articles are ignored.
+    A number or roman numeral is not: `2` and `II` are how sequels are named.
+    A release that adds a sequel number, numeral, or subtitle the request
+    does not use is a different game. Region and dump tags are not subtitles.
     """
     haystack = _normalise(release_title)
-    words = [w for w in _normalise(wanted).split() if len(w) > 2]
-    if not words:
+    parts = haystack.split()
+    wanted_parts = _normalise(wanted).split()
+    words = [word for word in wanted_parts if len(word) > 2]
+    idents = [word for word in wanted_parts if word.isdigit() or word in _ROMAN]
+    if not words and not idents:
         return False
-    return all(w in haystack for w in words)
+    if words and not all(word in haystack for word in words):
+        return False
+    if any(word not in parts for word in idents):
+        return False
+    return not _unrequested_title_tokens(release_title, wanted, platform)
 
 
 @dataclass(frozen=True)
@@ -330,7 +568,7 @@ def judge(release: Release, wanted: str,
     requested_languages = translation_langs_in(wanted)
     if requested_languages and not requested_languages <= translation_langs_in(release.title):
         return Judgement(-500, verdict="requested translation language does not match")
-    if not title_matches(release.title, wanted):
+    if not title_matches(release.title, wanted, platform):
         return Judgement(-500, verdict=f"title does not match {wanted!r}")
 
     if platform is not None and release.protocol == "hub":
